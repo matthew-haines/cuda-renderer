@@ -10,23 +10,24 @@
 #include <string_view>
 #include <surface_functions.h>
 
-#include "helper_math.h"
-#include "cuda_helpers.h"
+#include "cuda_helpers.cuh"
 #include "helper_kernels.cuh"
+#include "helper_math.h"
 
 static const int width = 1024;
 static const int height = 768;
 
 GLuint tex;
-cudaGraphicsResource *cudaResource;
+cudaGraphicsResource* cudaResource;
 
 __global__ void kernel(cudaSurfaceObject_t surf, int width, int height, float shift) {
   unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
   unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
   if (x < width && y < height) {
-    uchar4 data =
-      HSLToRGB({fmod(static_cast<float>(x) / static_cast<float>(width) + shift, 1.f) * 360,
-                sqrt(fmod(static_cast<float>(y) / static_cast<float>(height) + shift, 1.f)), 0.50, 0});
+    uchar4 data = HSLToRGB(
+        {fmod(static_cast<float>(x) / static_cast<float>(width) + shift, 1.f) * 360,
+         sqrt(fmod(static_cast<float>(y) / static_cast<float>(height) + shift, 1.f)),
+         0.50, 0});
     surf2Dwrite(data, surf, x * 4, y, cudaBoundaryModeTrap);
   }
 }
@@ -74,10 +75,11 @@ int main() {
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                local.data());
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  cudaCheck(
-    cudaGraphicsGLRegisterImage(&cudaResource, tex, GL_TEXTURE_2D, cudaGraphicsMapFlagsNone));
+  cudaCheck(cudaGraphicsGLRegisterImage(
+      &cudaResource, tex, GL_TEXTURE_2D, cudaGraphicsMapFlagsNone));
 
-  glManager.renderLoop(display, 1./60. * std::chrono::duration<float, std::chrono::seconds::period>{1.});
+  glManager.renderLoop(
+      display, 1. / 60. * std::chrono::duration<float, std::chrono::seconds::period>{1.});
 
   return 0;
 }

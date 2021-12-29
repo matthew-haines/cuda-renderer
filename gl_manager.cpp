@@ -15,6 +15,4 @@ GLManager::GLManager(int width, int height) : width{width}, height{height} {
     throw std::runtime_error{"GLEW init failed"};
 }
 
-GLManager::~GLManager() {
-  glfwTerminate();
-}
+GLManager::~GLManager() { glfwTerminate(); }

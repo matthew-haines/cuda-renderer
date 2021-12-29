@@ -1,12 +1,12 @@
-#include "cuda_helpers.h"
+#include "cuda_helpers.cuh"
 
 #include <stdexcept>
 
 void cudaCheckImpl(cudaError err, int lineNumber, std::string_view fileName) {
   if (err != cudaSuccess) {
     std::string errorMessage{
-      "CUDA Error " + std::to_string(err) + " " + cudaGetErrorString(err) +
-      "\nLocation: " + std::string{fileName} + ":" + std::to_string(lineNumber)};
+        "CUDA Error " + std::to_string(err) + " " + cudaGetErrorString(err) +
+        "\nLocation: " + std::string{fileName} + ":" + std::to_string(lineNumber)};
     throw std::runtime_error{errorMessage};
   }
 }

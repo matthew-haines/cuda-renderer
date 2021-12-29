@@ -1,113 +1,49 @@
 #include <iostream>
-#include <utility>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include <GL/glew.h>
-#include <cuda_gl_interop.h>
-
-#include "gl_manager.h"
-#include "cuda_helpers.h"
-#include "helper_math.h"
-#include "glm/ext/matrix_transform.hpp"
-
 #include <cuda.h>
+#include <cuda_gl_interop.h>
 #define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
 // #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
+#include <glm/gtc/epsilon.hpp>
 
-constexpr float epsilon = 1e-6;
+#include "camera.h"
+#include "cuda_helpers.cuh"
+#include "gl_manager.h"
+#include "helper_math.h"
+#include "intersector.cuh"
+#include "primitives.cuh"
+#include "random.cuh"
 
-template <typename T>
-struct FormatSymbol {};
+static const int width = 1200;
+static const int height = 900;
 
-template <>
-struct FormatSymbol<int> {
-  static constexpr char * const symbol = "%d";
-};
+GLuint outputTexture;
+cudaGraphicsResource* outputTextureResource;
+auto intersector = makeCUDAUnique<Intersector<Sphere>>();
+Camera camera{glm::uvec2{width, height}};
 
-template <>
-struct FormatSymbol<float> {
-  static constexpr char * const symbol = "%f";
-};
-
-template <int Length, typename T, glm::qualifier Q>
-__host__ __device__ void printVector(const glm::vec<Length, T, Q>& v) {
-  for (size_t i = 0; i < Length; ++i) {
-    printf(FormatSymbol<T>::symbol, v[i]);
-    printf(" ");
-  }
-  printf("\n");
-}
-
-struct Triangle {
-  __host__ __device__ glm::vec3 p1() const { return p0 + e1; }
-  __host__ __device__ glm::vec3 p2() const { return p0 + e2; }
-
-  glm::vec3 p0;
-  glm::vec3 e1;
-  glm::vec3 e2;
-};
-
-struct Ray {
-  glm::vec3 origin;
-  glm::vec3 direction;
-};
-
-struct Sphere {
-  glm::vec3 position;
-  float radius;
-
-  // (dist, intersect, normal)
-  __host__ __device__ std::tuple<float, glm::vec3, glm::vec3> intersect(const Ray& ray) const {
-    glm::vec3 dist = position - ray.origin;
-    float dist2 = glm::dot(dist, dist);
-    float lengthToClosest = glm::dot(dist, ray.direction);
-    float radius2 = radius * radius;
-    if (lengthToClosest < -epsilon)
-      return {-1., {}, {}};
-    float halfChordDistance2 = radius2 - dist2 + lengthToClosest * lengthToClosest;
-    if (halfChordDistance2 < -epsilon)
-      return {-1., {}, {}};
-    float intersectDistance;
-    if (dist2 > radius2) intersectDistance = lengthToClosest - sqrtf(halfChordDistance2);
-    else
-      intersectDistance = lengthToClosest + sqrtf(halfChordDistance2);
-    glm::vec3 isect = ray.direction * intersectDistance + ray.origin;
-    return {intersectDistance, isect, (isect - position) / radius};
-  }
-};
-
-static const int width = 1920;
-static const int height = 1080;
-
-static const float fov = M_PI / 2;
-
+template <typename... Primitives>
 __global__ void trace(cudaSurfaceObject_t outputSurface, int width, int height, Ray base,
-                      glm::vec3 dx, glm::vec3 dy, Sphere* deviceSpheres, size_t n) {
+                      glm::vec3 dx, glm::vec3 dy,
+                      const Intersector<Primitives...>* intersector) {
   unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
   unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
   if (x < width && y < height) {
-    glm::vec3 dir = glm::normalize(base.direction + static_cast<float>(static_cast<int>(x) - width / 2) * dx + static_cast<float>(static_cast<int>(y) - height / 2) * dy);
+    glm::vec3 dir = glm::normalize(
+        base.direction + static_cast<float>(static_cast<int>(x) - width / 2) * dx +
+        static_cast<float>(static_cast<int>(y) - height / 2) * dy);
     Ray ray{base.origin, dir};
 
-    float closest = 1e6;
-    bool intersected = false;
-    glm::vec3 closestIntersect;
-    glm::vec3 closestNormal;
-
-    for (size_t i = 0; i < n; ++i) {
-      auto [dist, intersect, normal] = deviceSpheres[i].intersect(ray);
-      if (dist >= 0 && dist < closest) {
-        closest = dist;
-        intersected = true;
-        closestIntersect = intersect;
-        closestNormal = normal;
-      }
-    }
+    auto [dist, isect, normal, _] = intersector->getIntersection(ray);
+    bool intersected = dist > 0;
 
     uchar4 colour;
-    unsigned char brightness = glm::dot(-ray.direction, closestNormal) * 255;
+    unsigned char brightness = glm::dot(-ray.direction, normal) * 255;
     if (intersected) {
       colour = {brightness, 0, 0, 255};
     } else {
@@ -117,67 +53,90 @@ __global__ void trace(cudaSurfaceObject_t outputSurface, int width, int height, 
   }
 }
 
-GLuint outputTexture;
-cudaGraphicsResource* outputTextureResource;
-Sphere* deviceSpheres;
-size_t n;
-
-template <int width, int height, typename T, typename... Args>
-void runGridKernel(T kernel, Args&&... args) {
-  dim3 threadsPerBlock(16, 16);
-  dim3 numBlocks((width + threadsPerBlock.x - 1) / threadsPerBlock.x,
-                 (height + threadsPerBlock.y - 1) / threadsPerBlock.y);
-  kernel<<<numBlocks, threadsPerBlock>>>(args...);
+// (f, pdf)
+template <typename T>
+__host__ __device__ std::pair<glm::vec3, float> lambertianBRDF(const T& primitive) {
+  return {primitive.colour * M_1_PIf32, 2 * M_PI};
 }
 
-// (xrot, yrot)
-glm::vec2 angles{0, 0};
-glm::vec3 pos{0, 0, 0};
+// (dir, pdf)
+__host__ __device__ std::pair<glm::vec3, float>
+cosineSampleHemisphere(uint32_t& rngState) {
+  // https://www.rorydriscoll.com/2009/01/07/better-sampling/
+  float u0 = rand_uniform(rngState);
+  float r = sqrtf(u0);
+  float theta = 2 * M_PI * rand_uniform(rngState);
+  return {{r * cosf(theta), r * sinf(theta), sqrtf(max(0., 1 - u0))}, cosf(theta) / M_PI};
+}
+
+template <typename... Primitives>
+__global__ void directLighting(cudaSurfaceObject_t outputSurface, int width, int height,
+                               Ray base, glm::vec3 dx, glm::vec3 dy,
+                               const Intersector<Primitives...>* intersector) {
+  unsigned int x = blockIdx.x * blockDim.x + threadIdx.x;
+  unsigned int y = blockIdx.y * blockDim.y + threadIdx.y;
+  uint32_t rngState = x * y;
+  if (x < width && y < height) {
+    glm::vec3 dir = glm::normalize(
+        base.direction + static_cast<float>(static_cast<int>(x) - width / 2) * dx +
+        static_cast<float>(static_cast<int>(y) - height / 2) * dy);
+    Ray ray{base.origin, dir};
+
+    const size_t samples = 10;
+
+    auto isect = intersector->getIntersection(ray);
+    glm::vec3 l{0., 0., 0.};
+    if (isect.intersected()) {
+      glm::vec3 lt{0., 0., 0.};
+      for (size_t i = 0; i < samples; ++i) {
+        lt += isect.primitive->colour * isect.primitive->power;
+        // choose random scene light
+        // estimate direct(p, wi) = W sr^-1 m^-2 \sim nLights * direct(p, wi, light)
+        // Estimate direct(p, wi, light) = int_{H^2} f(p, w0, wi) Ld(p, wi) |cos(theta_i)|
+        // dwi:
+        //   Sample Light:
+        //     Sample a direction from light -> p, with pdf of that and incident radiance
+        //     Compute BRDF for that wi and get |cos(theta_i)|
+        //     Set to 0 if not visible
+        //     Get MIS contribution with power heuristic, n = 1
+        //
+        //   Sample BRDF:
+        //     Sample a direction from p, with pdf
+        //     Compute BRDF and light pdf for direction if intersected
+        //     Get MIS contribution with power heuristic, n = 1
+
+        // IGNORE MIS FOR NOW
+        intersector->sampleLight(rngState, [&](auto& l, size_t nLights) {
+          auto [pointOnLight, lightpdf] = l.sample(rngState);
+          if (lightpdf > 0.) {
+            glm::vec3 wi = glm::normalize(pointOnLight - isect.intersection);
+            auto [brdf, brdfpdf] = lambertianBRDF(*isect.primitive);
+            brdf *= abs(glm::dot(wi, isect.normal));
+
+            auto nearest = intersector->getIntersection({isect.intersection, wi});
+            if (nearest.intersected()) {
+              glm::vec3 li =
+                  nearest.primitive->id == l.id ? l.power * l.colour : glm::vec3{};
+              lt += static_cast<float>(nLights) * brdf * li / lightpdf;
+            }
+          }
+        });
+      }
+      l += lt;
+    }
+    l /= static_cast<float>(samples);
+
+    l = glm::clamp(l, 0.f, 1.f) * 255.f;
+    uchar4 colour{static_cast<unsigned char>(l.x), static_cast<unsigned char>(l.y),
+                  static_cast<unsigned char>(l.z), 255};
+    surf2Dwrite(colour, outputSurface, x * 4, y, cudaBoundaryModeTrap);
+  }
+}
 
 void display(GLFWwindow* window) {
   cudaCheck(cudaGraphicsMapResources(1, &outputTextureResource, nullptr));
 
-  // update pos/dir
-  if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
-    angles.x -= 0.03;
-  }
-  if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
-    angles.x += 0.03;
-  }
-  angles.x = clamp(angles.x, -M_PI_2, M_PI_2);
-  if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) {
-    angles.y -= 0.03;
-  }
-  if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
-    angles.y += 0.03;
-  }
-  if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
-    angles = {0, 0};
-  }
-  // Spherical to Cartesian
-  auto dir = glm::vec3{sinf(angles.y) * cosf(angles.x), sinf(angles.x), cosf(angles.y) * cosf(angles.x)};
-  auto posx = glm::normalize(glm::cross(dir, {0, 1, 0}));
-  auto up = glm::cross(dir, posx);
-  glm::mat3 mat{posx, up, dir};
-
-  if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-    pos += mat * glm::vec3{0, 0, 0.1};
-  }
-  if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-    pos -= mat * glm::vec3{0.1, 0, 0};
-  }
-  if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-    pos -= mat * glm::vec3{0, 0, 0.1};
-  }
-  if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-    pos += mat * glm::vec3{0.1, 0, 0};
-  }
-  if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
-    pos += glm::vec3{0, 0.1, 0};
-  }
-  if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
-    pos -= glm::vec3{0, 0.1, 0};
-  }
+  camera.update(window);
 
   cudaArray_t arr;
   cudaCheck(cudaGraphicsSubResourceGetMappedArray(&arr, outputTextureResource, 0, 0));
@@ -187,14 +146,10 @@ void display(GLFWwindow* window) {
   cudaSurfaceObject_t outputSurface;
   cudaCheck(cudaCreateSurfaceObject(&outputSurface, &desc));
 
-  float cameraWidth = 2 * tanf(fov / 2);
-  float gridSize = cameraWidth / width;
-  glm::vec3 dx = gridSize * mat * glm::vec3{1, 0, 0};
-  glm::vec3 dy = gridSize * mat * glm::vec3{0, 1, 0};
-  glm::vec3 base = mat * glm::vec3{0, 0, 1};
-
   // Work
-  runGridKernel<width, height>(trace, outputSurface, width, height, Ray{pos, base}, dx, dy, deviceSpheres, n);
+  auto [ray, dx, dy] = camera.getState();
+  runGridKernel<width, height>(directLighting<Sphere>, outputSurface, width, height, ray,
+                               dx, dy, intersector.get());
   cudaCheck(cudaDeviceSynchronize());
   cudaCheck(cudaGetLastError());
 
@@ -208,28 +163,24 @@ void setup() {
   // Allocate Render Texture
   glGenTextures(1, &outputTexture);
   glBindTexture(GL_TEXTURE_2D, outputTexture);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+               nullptr);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  cudaCheck(cudaGraphicsGLRegisterImage(&outputTextureResource, outputTexture,
-                                        GL_TEXTURE_2D, cudaGraphicsMapFlagsNone));
+  cudaCheck(cudaGraphicsGLRegisterImage(
+      &outputTextureResource, outputTexture, GL_TEXTURE_2D, cudaGraphicsMapFlagsNone));
 
   // Allocate sphere buffer
-  std::vector<Sphere> spheres{
-    {{0, 0, 3}, 1},
-    {{1, 1, 5}, 1},
-    {{-1, -1, 2}, 0.25},
-  };
-  auto bytes = spheres.size() * sizeof(Sphere);
-
-  cudaCheck(cudaMalloc(&deviceSpheres, bytes));
-  cudaCheck(cudaMemcpy(deviceSpheres, spheres.data(), bytes, cudaMemcpyHostToDevice));
-  n = spheres.size();
+  intersector->addPrimitives(std::vector<Sphere>{
+      {{0, 0, 3}, 1, {1, 1, 1}},
+      {{-2, -2, 1}, 1, {1, 0, 0}},
+      {{-1, -1, 2}, 0.25, {1, 1, 1}, 1},
+  });
+//  intersector->addPrimitives(std::vector<Triangle>{
+//      {{}}
+//  });
 }
 
-void teardown() {
-  cudaFree(deviceSpheres);
-  cudaGraphicsUnregisterResource(outputTextureResource);
-}
+void teardown() { cudaGraphicsUnregisterResource(outputTextureResource); }
 
 int main() {
   GLManager glManager{width, height};
@@ -241,7 +192,8 @@ int main() {
 
   setup();
 
-  glManager.renderLoop(display, 1./60. * std::chrono::duration<float, std::chrono::seconds::period>{1.});
+  glManager.renderLoop(
+      display, 1. / 60. * std::chrono::duration<float, std::chrono::seconds::period>{1.});
 
   teardown();
 }

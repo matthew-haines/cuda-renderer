@@ -4,11 +4,12 @@
 __host__ __device__ uchar4 HSLToRGB(float4 pixel) {
   auto [h, s, l, _] = pixel;
   auto c = (1 - abs(2 * l - 1)) * s;
-  auto x = c * (1 - abs(fmod(h / 60, (float) 2) - 1));
+  auto x = c * (1 - abs(fmod(h / 60, (float)2) - 1));
   auto m = l - c / 2;
 
   float4 rgbf;
-  if (h < 60) rgbf = {c, x, 0, 0};
+  if (h < 60)
+    rgbf = {c, x, 0, 0};
   else if (h < 120)
     rgbf = {x, c, 0, 0};
   else if (h < 180)

@@ -32,7 +32,8 @@ void GLManager::renderLoop(Callback callback, Duration duration) {
     glfwPollEvents();
 
     std::this_thread::sleep_until(waitUntil);
-  } while (glfwGetKey(window, GLFW_KEY_ESCAPE) != GLFW_PRESS && !glfwWindowShouldClose(window));
+  } while (glfwGetKey(window, GLFW_KEY_ESCAPE) != GLFW_PRESS &&
+           !glfwWindowShouldClose(window));
 }
 
-#endif//RENDERER_GL_MANAGER_H
+#endif // RENDERER_GL_MANAGER_H
