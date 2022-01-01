@@ -60,9 +60,7 @@ Sphere::sample(glm::vec3 point, uint32_t& rngState) const {
 //  float sinAlpha = sqrtf(max(0.0, 1 - cosAlpha * cosAlpha));
 }
 
-Triangle::Triangle(glm::vec3 p0, glm::vec3 e1, glm::vec3 e2, glm::vec3 colour, float power = 0) {
-
-}
+Triangle::Triangle(glm::vec3 p0, glm::vec3 e1, glm::vec3 e2, glm::vec3 colour, float power) : Primitive{colour, power}, p0{p0}, e1{e1}, e2{e2} {}
 
 __host__ __device__ Intersection Triangle::intersect(const Ray& ray) const {
   // Muller Trombore
@@ -100,4 +98,11 @@ Triangle::sample(uint32_t& rngState) const {
 __host__ __device__ std::pair<glm::vec3, float>
 Triangle::sample(glm::vec3 point, uint32_t& rngState) const {
   return {};
+}
+
+std::vector<Triangle> makeQuad(glm::vec3 p0, glm::vec3 p1, glm::vec3 p2, glm::vec3 p3, glm::vec3 colour, float power) {
+  return {
+    {p0, p1 - p0, p2 - p0, colour, power},
+    {p0, p2 - p0, p3 - p0, colour, power},
+  };
 }

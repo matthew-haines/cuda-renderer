@@ -5,6 +5,9 @@ Camera::Camera(glm::uvec2 dim, float fov, glm::vec2 angles, glm::vec3 position,
     : dim{dim}, fov{fov}, angles{angles}, position{position}, viewMatrix{viewMatrix} {}
 
 void Camera::update(GLFWwindow* window) {
+  oldAngles = angles;
+  oldPosition = position;
+
   if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
     angles.x -= 0.03;
   }
@@ -46,6 +49,10 @@ void Camera::update(GLFWwindow* window) {
   if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
     position -= glm::vec3{0, 0.1, 0};
   }
+}
+
+bool Camera::changed() const {
+  return oldAngles != angles || oldPosition != position;
 }
 
 std::tuple<Ray, glm::vec3, glm::vec3> Camera::getState() const {

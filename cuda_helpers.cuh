@@ -86,7 +86,7 @@ T* deviceVector(const std::vector<T>& v) {
 
 // rotates {0, 0, 1} is rotated to normal
 inline __host__ __device__ glm::quat normalQuat(const glm::vec3& normal) {
-  return glm::angleAxis(acosf(glm::dot({0, 0, 1}, normal)), glm::cross(normal, {0, 0, 1}));
+  return glm::angleAxis(acosf(glm::dot({0, 0, 1}, normal)), glm::cross({0, 0, 1}, normal));
 }
 
 #endif // RENDERER_CUDA_HELPERS_CUH

@@ -15,16 +15,18 @@ public:
          glm::vec3 position = {}, glm::mat3 viewMatrix = glm::mat3{1});
 
   void update(GLFWwindow* window);
+  bool changed() const;
 
   // (Camera ray, dx, dy)
   std::tuple<Ray, glm::vec3, glm::vec3> getState() const;
 
-private:
   glm::uvec2 dim;
   float fov;
   glm::vec2 angles; // (xrot, yrot)
   glm::vec3 position;
   glm::mat3 viewMatrix;
+  glm::vec2 oldAngles;
+  glm::vec3 oldPosition;
 };
 
 #endif // RENDERER_CAMERA_H

@@ -1,6 +1,8 @@
 #ifndef RENDERER_PRIMITIVES_CUH
 #define RENDERER_PRIMITIVES_CUH
 
+#include <vector>
+
 #include <glm/glm.hpp>
 
 #include "ray.h"
@@ -51,5 +53,7 @@ struct Triangle : public Primitive {
   glm::vec3 e1;
   glm::vec3 e2;
 };
+
+std::vector<Triangle> makeQuad(glm::vec3 p0, glm::vec3 p1, glm::vec3 p2, glm::vec3 p3, glm::vec3 colour, float power = 0.);
 
 #endif // RENDERER_PRIMITIVES_CUH
