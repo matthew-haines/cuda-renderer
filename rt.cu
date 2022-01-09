@@ -8,7 +8,6 @@
 #include <cuda.h>
 #include <cuda_gl_interop.h>
 #define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
-// #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
 #include <glm/gtc/epsilon.hpp>
 
