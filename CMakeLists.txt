@@ -43,12 +43,6 @@ set_target_properties(renderlib PROPERTIES
         LINKER_LANGUAGE CUDA
         CUDA_SEPARABLE_COMPILATION ON)
 
-add_executable(interactive interactive.cu)
-target_link_libraries(interactive renderlib)
-set_target_properties(interactive PROPERTIES
-        LINKER_LANGUAGE CUDA
-        CUDA_SEPARABLE_COMPILATION ON)
-
 add_executable(rt rt.cu)
 target_link_libraries(rt renderlib)
 set_target_properties(rt PROPERTIES

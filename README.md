@@ -18,6 +18,7 @@ Building:
 ```
 git clone --recursive https://github.com/matthew-haines/cuda-renderer.git
 cd cuda-renderer && mkdir build && cmake . -B build && cmake --build build
+build/rt
 ```
 
 Performance:
